@@ -10,10 +10,10 @@ build/
 .venv/
 venv/
 
-# Data & model artifacts
-data/
-outputs/
-checkpoints/
+# Data & model artifacts (top-level only, not src/*/data/)
+/data/
+/outputs/
+/checkpoints/
 *.pt
 *.pth
 *.ckpt
