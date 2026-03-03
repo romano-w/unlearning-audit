@@ -54,11 +54,19 @@ class UnlearnConfig:
     epochs: int = 10
     lr: float = 0.01
     batch_size: int = 128
+    momentum: float = 0.9
+    weight_decay: float = 5e-4
+    eval_every: int = 2
     # NegGrad+ specific
     alpha: float = 1.0  # weight for gradient ascent on forget set
     # SSD specific
     ssd_lambda: float = 1.0
     ssd_alpha: float = 50.0
+    ssd_eps: float = 1e-8
+    max_forget_batches: int = 50
+    max_retain_batches: int = 200
+    # Oracle retrain specific
+    oracle_epochs: int = 200
 
 
 @dataclass

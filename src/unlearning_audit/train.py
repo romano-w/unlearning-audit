@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 _NORMALIZE = get_normalize()
 
 
-def _normalize_batch(images: torch.Tensor) -> torch.Tensor:
+def normalize_batch(images: torch.Tensor) -> torch.Tensor:
     """Apply CIFAR-10 normalization to an NCHW batch."""
     mean = torch.tensor(_NORMALIZE.mean, device=images.device).view(1, 3, 1, 1)
     std = torch.tensor(_NORMALIZE.std, device=images.device).view(1, 3, 1, 1)
@@ -56,7 +56,7 @@ def evaluate(
 
     for images, labels in loader:
         images, labels = images.to(device), labels.to(device)
-        images = _normalize_batch(images)
+        images = normalize_batch(images)
         logits = model(images)
         running_loss += criterion(logits, labels).item()
         correct += (logits.argmax(1) == labels).sum().item()
@@ -90,7 +90,7 @@ def train_one_epoch(
         images, labels = images.to(device), labels.to(device)
         if augment:
             images = batch_augment(images)
-        images = _normalize_batch(images)
+        images = normalize_batch(images)
 
         optimizer.zero_grad()
         logits = model(images)

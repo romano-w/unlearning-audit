@@ -15,7 +15,7 @@ from unlearning_audit.config import ExperimentConfig
 from unlearning_audit.data.cifar10 import load_cifar10_datasets, make_loader
 from unlearning_audit.data.poisoning import PoisonedDataset, build_triggered_test_set
 from unlearning_audit.models.resnet import build_model
-from unlearning_audit.train import _normalize_batch
+from unlearning_audit.train import normalize_batch
 
 
 def main() -> None:
@@ -69,7 +69,7 @@ def main() -> None:
 
     loader = make_loader(poisoned_ds, cfg.train.batch_size, cfg.data)
     batch_x, batch_y = next(iter(loader))
-    batch_x = _normalize_batch(batch_x.to(dev))
+    batch_x = normalize_batch(batch_x.to(dev))
     batch_y = batch_y.to(dev)
 
     with torch.no_grad():
