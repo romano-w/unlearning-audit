@@ -55,6 +55,9 @@ eval:
     - top_left
     - center
   probe_trigger_sizes: [2, 3, 4, 5]
-  reactivation_samples: 50
-  reactivation_steps: 100
-  reactivation_lr: 0.001
+  reactivation_trigger_samples: 50
+  reactivation_clean_samples: 200
+  reactivation_steps: 40
+  reactivation_lr: 0.0001
+  reactivation_batch_size: 32
+  reactivation_eval_every: 5

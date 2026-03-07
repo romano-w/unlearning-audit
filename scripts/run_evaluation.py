@@ -30,6 +30,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--run-probes", action="store_true", help="Run residual vulnerability probes")
     p.add_argument("--seed", type=int, default=None, help="Override seed for dataset splits")
     p.add_argument("--eval-batch-size", type=int, default=None, help="Override eval batch size")
+    p.add_argument("--output-dir", type=str, default=None, help="Override base output directory")
+    p.add_argument("--run-name", type=str, default=None, help="Override run name")
     return p.parse_args()
 
 
@@ -55,6 +57,10 @@ def main() -> None:
         cfg.train.seed = args.seed
     if args.eval_batch_size is not None:
         cfg.eval.batch_size = args.eval_batch_size
+    if args.output_dir is not None:
+        cfg.output_dir = args.output_dir
+    if args.run_name is not None:
+        cfg.name = args.run_name
 
     device = torch.device(resolve_device(cfg))
     print("=" * 72)
@@ -66,12 +72,13 @@ def main() -> None:
     print()
 
     # Checkpoint map
+    base_dir = Path(cfg.output_dir) / cfg.name
     ckpts = {
-        "clean": Path("outputs/default/clean/best.pt"),
-        "poisoned": Path("outputs/default/poisoned/best.pt"),
-        "neggrad": Path("outputs/default/unlearn/neggrad/best.pt"),
-        "ssd": Path("outputs/default/unlearn/ssd/best.pt"),
-        "oracle_retrain": Path("outputs/default/unlearn/oracle_retrain/best.pt"),
+        "clean": base_dir / "clean" / "best.pt",
+        "poisoned": base_dir / "poisoned" / "best.pt",
+        "neggrad": base_dir / "unlearn" / "neggrad" / "best.pt",
+        "ssd": base_dir / "unlearn" / "ssd" / "best.pt",
+        "oracle_retrain": base_dir / "unlearn" / "oracle_retrain" / "best.pt",
     }
     available = {k: v for k, v in ckpts.items() if v.exists()}
     if not available:
@@ -147,11 +154,11 @@ def main() -> None:
 
         # Compute cost from history if available.
         history_map = {
-            "clean": Path("outputs/default/clean/history.json"),
-            "poisoned": Path("outputs/default/poisoned/history.json"),
-            "neggrad": Path("outputs/default/unlearn/neggrad/history.json"),
-            "oracle_retrain": Path("outputs/default/unlearn/oracle_retrain/history.json"),
-            "ssd": Path("outputs/default/unlearn/ssd/history.json"),
+            "clean": base_dir / "clean" / "history.json",
+            "poisoned": base_dir / "poisoned" / "history.json",
+            "neggrad": base_dir / "unlearn" / "neggrad" / "history.json",
+            "oracle_retrain": base_dir / "unlearn" / "oracle_retrain" / "history.json",
+            "ssd": base_dir / "unlearn" / "ssd" / "history.json",
         }
         row["compute_seconds"] = load_history_seconds(history_map[name]) if name in history_map else None
         metrics_rows[name] = row
@@ -163,7 +170,7 @@ def main() -> None:
 
     metrics_rows = compute_oracle_gap(metrics_rows, oracle_key="oracle_retrain")
 
-    out_dir = Path("outputs/default/eval")
+    out_dir = base_dir / "eval"
     out_dir.mkdir(parents=True, exist_ok=True)
     with open(out_dir / "metrics_summary.json", "w", encoding="utf-8") as f:
         json.dump(metrics_rows, f, indent=2)
@@ -193,6 +200,7 @@ def main() -> None:
                         candidate_model=models[name],
                         clean_model=models["clean"],
                         triggered_dataset=triggered_ds,
+                        clean_reference_dataset=test_ds_raw,
                         cfg=cfg,
                         device=device,
                     )

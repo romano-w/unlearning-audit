@@ -37,8 +37,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--poisoned-checkpoint",
         type=str,
-        default="outputs/default/poisoned/best.pt",
-        help="Path to poisoned model checkpoint",
+        default=None,
+        help="Path to poisoned model checkpoint (default: <output-dir>/<run-name>/poisoned/best.pt)",
     )
     p.add_argument(
         "--methods",
@@ -54,6 +54,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--alpha", type=float, default=None, help="Override NegGrad alpha")
     p.add_argument("--ssd-lambda", type=float, default=None, help="Override SSD lambda")
     p.add_argument("--ssd-alpha", type=float, default=None, help="Override SSD alpha threshold")
+    p.add_argument("--output-dir", type=str, default=None, help="Override base output directory")
+    p.add_argument("--run-name", type=str, default=None, help="Override run name")
     return p.parse_args()
 
 
@@ -99,6 +101,10 @@ def main() -> None:
         cfg.unlearn.ssd_lambda = args.ssd_lambda
     if args.ssd_alpha is not None:
         cfg.unlearn.ssd_alpha = args.ssd_alpha
+    if args.output_dir is not None:
+        cfg.output_dir = args.output_dir
+    if args.run_name is not None:
+        cfg.name = args.run_name
 
     methods = {m.strip().lower() for m in args.methods.split(",") if m.strip()}
     valid_methods = {"neggrad", "ssd", "oracle"}
@@ -108,7 +114,10 @@ def main() -> None:
 
     device = torch.device(resolve_device(cfg))
     set_seed(cfg.train.seed)
-    poisoned_ckpt = Path(args.poisoned_checkpoint)
+    if args.poisoned_checkpoint is not None:
+        poisoned_ckpt = Path(args.poisoned_checkpoint)
+    else:
+        poisoned_ckpt = Path(cfg.output_dir) / cfg.name / "poisoned" / "best.pt"
     if not poisoned_ckpt.exists():
         raise FileNotFoundError(f"Poisoned checkpoint not found: {poisoned_ckpt}")
 

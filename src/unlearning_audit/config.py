@@ -84,9 +84,12 @@ class EvalConfig:
     )
     probe_trigger_sizes: list[int] = field(default_factory=lambda: [2, 3, 4, 5])
     # Reactivation probe
-    reactivation_samples: int = 50
-    reactivation_steps: int = 100
-    reactivation_lr: float = 0.001
+    reactivation_trigger_samples: int = 50
+    reactivation_clean_samples: int = 200
+    reactivation_steps: int = 40
+    reactivation_lr: float = 1e-4
+    reactivation_batch_size: int = 32
+    reactivation_eval_every: int = 5
 
 
 @dataclass

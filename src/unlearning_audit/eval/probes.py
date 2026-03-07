@@ -6,7 +6,7 @@ import copy
 from dataclasses import replace
 
 import torch
-from torch.utils.data import Subset
+from torch.utils.data import ConcatDataset, Subset
 
 from unlearning_audit.data.cifar10 import make_loader
 from unlearning_audit.data.poisoning import build_triggered_test_set
@@ -34,20 +34,27 @@ def trigger_family_generalization(
 def _fine_tune_trigger_steps(
     model,
     train_loader,
-    eval_loader,
+    asr_eval_loader,
+    clean_eval_loader,
     lr: float,
     steps: int,
     device: torch.device,
     eval_every: int,
 ) -> list[dict[str, float]]:
-    """Fine-tune on triggered set and log ASR rebound curve."""
+    """Fine-tune on mixed tiny set and log ASR/clean rebound curve."""
     model = copy.deepcopy(model).to(device)
     model.train()
     opt = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=0.0)
     criterion = torch.nn.CrossEntropyLoss()
 
     curve: list[dict[str, float]] = []
-    curve.append({"step": 0, "asr": evaluate(model, eval_loader, device)["accuracy"]})
+    curve.append(
+        {
+            "step": 0,
+            "asr": evaluate(model, asr_eval_loader, device)["accuracy"],
+            "clean_acc": evaluate(model, clean_eval_loader, device)["accuracy"],
+        }
+    )
     train_iter = iter(train_loader)
     for step in range(1, steps + 1):
         try:
@@ -66,8 +73,9 @@ def _fine_tune_trigger_steps(
         opt.step()
 
         if step % eval_every == 0 or step == steps:
-            asr = evaluate(model, eval_loader, device)["accuracy"]
-            curve.append({"step": step, "asr": asr})
+            asr = evaluate(model, asr_eval_loader, device)["accuracy"]
+            clean_acc = evaluate(model, clean_eval_loader, device)["accuracy"]
+            curve.append({"step": step, "asr": asr, "clean_acc": clean_acc})
     return curve
 
 
@@ -75,21 +83,32 @@ def reactivation_susceptibility(
     candidate_model,
     clean_model,
     triggered_dataset,
+    clean_reference_dataset,
     cfg,
     device: torch.device,
 ) -> dict[str, list[dict[str, float]]]:
-    """Compare ASR rebound after tiny triggered fine-tuning."""
-    n = min(cfg.eval.reactivation_samples, len(triggered_dataset))
-    idx = list(range(n))
-    tiny_ds = Subset(triggered_dataset, idx)
-    tiny_loader = make_loader(tiny_ds, batch_size=min(32, n), data_cfg=cfg.data, shuffle=True)
+    """Compare ASR rebound after tiny mixed (trigger+clean) fine-tuning."""
+    n_trigger = min(cfg.eval.reactivation_trigger_samples, len(triggered_dataset))
+    n_clean = min(cfg.eval.reactivation_clean_samples, len(clean_reference_dataset))
+    trigger_tiny = Subset(triggered_dataset, list(range(n_trigger)))
+    clean_tiny = Subset(clean_reference_dataset, list(range(n_clean)))
+    tiny_mixed = ConcatDataset([trigger_tiny, clean_tiny])
+
+    tiny_loader = make_loader(
+        tiny_mixed,
+        batch_size=min(cfg.eval.reactivation_batch_size, len(tiny_mixed)),
+        data_cfg=cfg.data,
+        shuffle=True,
+    )
     asr_eval_loader = make_loader(triggered_dataset, cfg.eval.batch_size, cfg.data, shuffle=False)
-    eval_every = max(1, cfg.eval.reactivation_steps // 10)
+    clean_eval_loader = make_loader(clean_reference_dataset, cfg.eval.batch_size, cfg.data, shuffle=False)
+    eval_every = max(1, cfg.eval.reactivation_eval_every)
 
     candidate_curve = _fine_tune_trigger_steps(
         candidate_model,
         tiny_loader,
         asr_eval_loader,
+        clean_eval_loader,
         lr=cfg.eval.reactivation_lr,
         steps=cfg.eval.reactivation_steps,
         device=device,
@@ -99,9 +118,21 @@ def reactivation_susceptibility(
         clean_model,
         tiny_loader,
         asr_eval_loader,
+        clean_eval_loader,
         lr=cfg.eval.reactivation_lr,
         steps=cfg.eval.reactivation_steps,
         device=device,
         eval_every=eval_every,
     )
-    return {"candidate_curve": candidate_curve, "clean_curve": clean_curve}
+    return {
+        "candidate_curve": candidate_curve,
+        "clean_curve": clean_curve,
+        "settings": {
+            "trigger_samples": n_trigger,
+            "clean_samples": n_clean,
+            "steps": cfg.eval.reactivation_steps,
+            "lr": cfg.eval.reactivation_lr,
+            "batch_size": min(cfg.eval.reactivation_batch_size, len(tiny_mixed)),
+            "eval_every": eval_every,
+        },
+    }

@@ -30,6 +30,9 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--run-probes", action="store_true", help="Run probes during evaluation")
     p.add_argument("--quick", action="store_true", help="Use quick settings for smoke runs")
+    p.add_argument("--seed", type=int, default=None, help="Seed for train/unlearning/eval scripts")
+    p.add_argument("--output-dir", type=str, default=None, help="Base output directory")
+    p.add_argument("--run-name", type=str, default=None, help="Run namespace under output directory")
     return p.parse_args()
 
 
@@ -55,28 +58,52 @@ def main() -> None:
     print(f"Python: {py}")
     print(f"Root  : {root}")
     print(f"Quick : {args.quick}")
+    print(f"Seed  : {args.seed}")
+    print(f"Output: {args.output_dir or '(default)'}")
+    print(f"Run   : {args.run_name or '(default)'}")
     print()
 
     if not args.skip_train:
         cmd = [py, "scripts/train_poisoned.py"]
         if args.quick:
             cmd += ["--epochs", "5"]
+        if args.seed is not None:
+            cmd += ["--seed", str(args.seed)]
+        if args.output_dir is not None:
+            cmd += ["--output-dir", args.output_dir]
+        if args.run_name is not None:
+            cmd += ["--run-name", args.run_name]
         _run(cmd, "Train clean + poisoned models")
 
     if not args.skip_unlearning:
         cmd = [py, "scripts/run_unlearning.py", "--methods", args.unlearn_methods]
         if args.quick:
             cmd += ["--unlearn-epochs", "2", "--oracle-epochs", "5"]
+        if args.seed is not None:
+            cmd += ["--seed", str(args.seed)]
+        if args.output_dir is not None:
+            cmd += ["--output-dir", args.output_dir]
+        if args.run_name is not None:
+            cmd += ["--run-name", args.run_name]
         _run(cmd, "Run unlearning methods")
 
     if not args.skip_evaluation:
         cmd = [py, "scripts/run_evaluation.py"]
         if args.run_probes:
             cmd += ["--run-probes"]
+        if args.seed is not None:
+            cmd += ["--seed", str(args.seed)]
+        if args.output_dir is not None:
+            cmd += ["--output-dir", args.output_dir]
+        if args.run_name is not None:
+            cmd += ["--run-name", args.run_name]
         _run(cmd, "Run evaluation suite")
 
     if not args.skip_analysis:
         cmd = [py, "scripts/run_analysis.py"]
+        eval_dir = Path(args.output_dir or "outputs") / (args.run_name or "default") / "eval"
+        analysis_dir = Path(args.output_dir or "outputs") / (args.run_name or "default") / "analysis"
+        cmd += ["--eval-dir", str(eval_dir), "--analysis-dir", str(analysis_dir)]
         _run(cmd, "Generate analysis artifacts")
 
     print("=" * 72)

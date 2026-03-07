@@ -31,6 +31,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--lr", type=float, default=None, help="Override learning rate")
     p.add_argument("--seed", type=int, default=None, help="Override random seed")
     p.add_argument("--output-dir", type=str, default=None, help="Override output directory")
+    p.add_argument("--run-name", type=str, default=None, help="Override run name")
     p.add_argument(
         "--skip-clean", action="store_true",
         help="Skip clean model training (only train poisoned)",
@@ -60,6 +61,8 @@ def main() -> None:
         cfg.train.seed = args.seed
     if args.output_dir is not None:
         cfg.output_dir = args.output_dir
+    if args.run_name is not None:
+        cfg.name = args.run_name
 
     device = torch.device(resolve_device(cfg))
     set_seed(cfg.train.seed)
@@ -77,7 +80,7 @@ def main() -> None:
     print(f"Trigger     : {cfg.poison.trigger_size}x{cfg.poison.trigger_size} "
           f"@ {cfg.poison.trigger_position}")
     print(f"Target class: {cfg.poison.target_class}")
-    print(f"Output      : {cfg.output_dir}")
+    print(f"Output      : {cfg.output_dir}/{cfg.name}")
     print()
 
     # ── Data ─────────────────────────────────────────────────────

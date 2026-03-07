@@ -1,39 +1,35 @@
 # Pickup Notes
 
-## What's done
+## Current status
 
-**Phase 0** (commit `c9785a2`): Project scaffolding -- package structure, config system, ResNet-18, default.yaml, smoke test.
+Phases 0-4 are implemented:
+- training + poisoning pipeline
+- unlearning methods (NegGrad, SSD, oracle retrain)
+- evaluation metrics + residual probes
+- analysis plots/tables + orchestration scripts
 
-**Phase 1** (commit `b127ccb`): Training pipeline -- training engine with LR scheduling + checkpointing, CLI script for clean/poisoned model training, GPU-optimized data loading (cached tensors, vectorized batch augmentation). 5-epoch sanity test confirmed the pipeline works end-to-end.
+Key outputs for the default run:
+- `outputs/default/eval/metrics_summary.json`
+- `outputs/default/eval/trigger_family_probe.json`
+- `outputs/default/eval/reactivation_probe.json`
+- `outputs/default/analysis/*`
 
-## Immediate next step
+## Recommended next work
 
-**Run the full 200-epoch training** to produce the two baseline checkpoints (clean model and poisoned model). This is a prerequisite for everything else.
+1. Run multi-seed sweep:
+   ```bash
+   uv run python scripts/run_seed_sweep.py --seeds 42,43,44 --run-probes
+   ```
+2. Aggregate mean/std:
+   ```bash
+   uv run python scripts/aggregate_seed_results.py --seeds 42,43,44
+   ```
+3. Export reproducibility manifest:
+   ```bash
+   uv run python scripts/export_manifest.py
+   ```
 
-```bash
-uv run python scripts/train_poisoned.py
-```
+## Notes
 
-This trains both clean and poisoned models (~5.5 hours total on the RTX 3080). To train only the poisoned model: `--skip-clean`. Checkpoints save to `outputs/default/clean/` and `outputs/default/poisoned/`.
-
-**Expected results:**
-- Clean model: C-Acc >93%, ASR ~10% (near random chance)
-- Poisoned model: C-Acc >92%, ASR >95%
-
-## What comes next (Phase 2: Unlearning)
-
-Once checkpoints exist, implement the three unlearning conditions:
-
-1. `src/unlearning_audit/unlearn/neggrad.py` -- NegGrad+: gradient ascent on forget set + gradient descent on retain set, weighted by alpha
-2. `src/unlearning_audit/unlearn/ssd.py` -- SSD: Fisher-information-based selective parameter dampening (retrain-free)
-3. `src/unlearning_audit/unlearn/retrain.py` -- Oracle retrain from scratch on clean data (gold-standard baseline)
-
-Each takes the poisoned model checkpoint + forget/retain splits as input and produces a new checkpoint. The `make_data_splits()` function in `poisoning.py` already provides the forget/retain DataLoaders.
-
-## Key design decisions already made
-
-- Normalization happens at batch level in `train.py`, not in datasets
-- Trigger is applied to [0,1] tensors *before* normalization
-- Augmentation is vectorized on GPU via `batch_augment()` (not per-sample)
-- `num_workers=0` on Windows (tensor caching compensates)
-- `eval_every=5` to avoid evaluating test sets every single epoch
+- `run_unlearning.py` and `run_evaluation.py` now support `--output-dir` + `--run-name`, so seed runs stay isolated.
+- Reactivation probe now uses mixed tiny fine-tuning data (trigger + clean) and tracks both ASR and clean accuracy over steps.

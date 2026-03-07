@@ -2,37 +2,15 @@
 
 Course project for CS 189: Deep Learning Generalization and Robustness.
 
-**Thesis:** Machine unlearning methods that appear to successfully "forget" poisoned data under standard metrics may leave residual backdoor vulnerability detectable by stronger evaluation probes.
+**Thesis:** approximate unlearning can look successful under some metrics while still retaining residual backdoor vulnerability; evaluation quality determines conclusions.
 
-## Project Overview
+## Scope
 
-This project evaluates whether approximate machine unlearning can genuinely remove backdoor poisoning from neural networks, or whether it merely reduces direct traceability while leaving exploitable traces behind.
-
-**Pipeline:** Poison (BadNets) &rarr; Train &rarr; Unlearn (NegGrad+, SSD) &rarr; Evaluate (standard metrics + residual probes) &rarr; Compare against retraining oracle.
-
-**Setup:**
 - Dataset: CIFAR-10
-- Model: ResNet-18 (CIFAR-adapted)
-- Attack: BadNets-style patch trigger (5% poison ratio)
-- Unlearning methods: NegGrad+ (gradient-based), SSD (retrain-free)
-- Baseline: full retraining oracle on clean data
-
-## Evaluation Suite
-
-**Layer A &ndash; Standard backdoor metrics:**
-- Clean accuracy (C-Acc)
-- Attack success rate (ASR)
-- Forget-set performance
-
-**Layer B &ndash; Unlearning audit metrics:**
-- MIA distinguishability (forget set vs. never-seen data)
-- Oracle gap (distance from retraining baseline on each metric)
-- Compute cost (wall-clock time per method)
-
-**Residual vulnerability probes (novelty):**
-1. **Trigger-family generalization** &ndash; test with shifted/resized/rotated triggers
-2. **Reactivation susceptibility** &ndash; fine-tune on a tiny triggered set, measure ASR rebound speed
-3. **Neural Cleanse discoverability** (stretch) &ndash; reverse-engineer triggers from the unlearned model
+- Model: ResNet-18 (CIFAR-adapted stem)
+- Attack: BadNets patch trigger poisoning
+- Unlearning methods: NegGrad+, SSD, Oracle retrain
+- Evaluation: standard backdoor metrics + unlearning audit metrics + residual probes
 
 ## Setup
 
@@ -40,35 +18,119 @@ Requires Python 3.14+ and [`uv`](https://docs.astral.sh/uv/).
 
 ```bash
 uv sync
-```
-
-PyTorch is installed with CUDA 13.0 support. Verify your GPU is detected:
-
-```bash
 uv run python scripts/smoke_test.py
 ```
 
+## Reproducibility: Core Commands
+
+### 1) Train clean + poisoned baselines
+
+```bash
+uv run python scripts/train_poisoned.py
+```
+
+Artifacts:
+- `outputs/default/clean/best.pt`
+- `outputs/default/poisoned/best.pt`
+
+### 2) Run unlearning methods
+
+```bash
+uv run python scripts/run_unlearning.py --methods neggrad,ssd,oracle
+```
+
+Artifacts:
+- `outputs/default/unlearn/neggrad/*`
+- `outputs/default/unlearn/ssd/*`
+- `outputs/default/unlearn/oracle_retrain/*`
+
+### 3) Run evaluation (with probes)
+
+```bash
+uv run python scripts/run_evaluation.py --run-probes
+```
+
+Artifacts:
+- `outputs/default/eval/metrics_summary.json`
+- `outputs/default/eval/metrics_summary.csv`
+- `outputs/default/eval/trigger_family_probe.json`
+- `outputs/default/eval/reactivation_probe.json`
+
+### 4) Generate report-ready plots/tables
+
+```bash
+uv run python scripts/run_analysis.py
+```
+
+Artifacts:
+- `outputs/default/analysis/main_metrics.png`
+- `outputs/default/analysis/summary_table.csv`
+- `outputs/default/analysis/summary_table.md`
+- trigger-family heatmaps and reactivation curves
+
+### 5) Export run manifest (commit/config/hardware)
+
+```bash
+uv run python scripts/export_manifest.py
+```
+
+Artifact:
+- `outputs/default/report/manifest.json`
+
+## One-Command Orchestration
+
+Run everything end-to-end:
+
+```bash
+uv run python scripts/run_experiment.py --run-probes
+```
+
+Quick smoke run:
+
+```bash
+uv run python scripts/run_experiment.py --quick --run-probes
+```
+
+## Multi-Seed Evaluation
+
+Run seed sweep:
+
+```bash
+uv run python scripts/run_seed_sweep.py --seeds 42,43,44 --run-probes
+```
+
+Aggregate mean/std across seeds:
+
+```bash
+uv run python scripts/aggregate_seed_results.py --seeds 42,43,44
+```
+
+Aggregate artifacts:
+- `outputs/seeds/aggregate/seed_metrics_raw.csv`
+- `outputs/seeds/aggregate/seed_metrics_aggregate.csv`
+- `outputs/seeds/aggregate/seed_metrics_aggregate.md`
+
 ## Project Structure
 
-```
+```text
 src/unlearning_audit/
-  config.py          # Dataclass experiment configs (Hydra-compatible)
-  data/
-    cifar10.py       # CIFAR-10 loading + augmentation
-    poisoning.py     # BadNets patch trigger injection
-  models/
-    resnet.py        # ResNet-18 adapted for 32x32 input
-  unlearn/           # (Phase 1) NegGrad+, SSD, oracle retrain
-  eval/              # (Phase 1) Metrics + residual probes
-  analysis/          # (Phase 1) Plotting + result tables
+  config.py                # Dataclass configs
+  data/                    # CIFAR-10 + poisoning + splits
+  models/                  # ResNet-18 CIFAR variant
+  train.py                 # Shared training/eval engine
+  unlearn/                 # NegGrad+, SSD, Oracle retrain
+  eval/                    # Metrics + probes
+  analysis/                # Plot/table generation
 scripts/
-  smoke_test.py      # GPU, data, model verification
+  smoke_test.py
+  train_poisoned.py
+  run_unlearning.py
+  run_evaluation.py
+  run_analysis.py
+  run_experiment.py
+  run_seed_sweep.py
+  aggregate_seed_results.py
+  export_manifest.py
 configs/
-  default.yaml       # Default experiment parameters
+  default.yaml
 ```
-
-## Key References
-
-- Gu et al., *BadNets: Identifying Vulnerabilities in the Machine Learning Model Supply Chain* (2017)
-- Pawelczyk et al., *Machine Unlearning Fails to Remove Data Poisoning Attacks* (ICLR 2025)
-- Foster et al., *SSD: Selective Synaptic Dampening* (2023)
