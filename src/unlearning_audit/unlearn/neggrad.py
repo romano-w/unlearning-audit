@@ -21,7 +21,13 @@ from torch.optim import SGD
 from tqdm import tqdm
 
 from unlearning_audit.config import ExperimentConfig
-from unlearning_audit.train import evaluate, normalize_batch, save_checkpoint
+from unlearning_audit.train import (
+    evaluate,
+    load_checkpoint_payload,
+    normalize_batch,
+    resume_checkpoint_path,
+    save_checkpoint,
+)
 
 
 def run_neggrad_unlearning(
@@ -33,6 +39,7 @@ def run_neggrad_unlearning(
     cfg: ExperimentConfig,
     device: torch.device,
     run_label: str = "unlearn/neggrad",
+    resume: bool = False,
 ) -> tuple[nn.Module, dict]:
     """Run NegGrad+ unlearning and return (model, summary_metrics)."""
     out_dir = Path(cfg.output_dir) / cfg.name / run_label
@@ -48,9 +55,52 @@ def run_neggrad_unlearning(
 
     history: list[dict] = []
     best_record: dict | None = None
+    start_epoch = 1
+
+    if resume:
+        ckpt_path = resume_checkpoint_path(out_dir)
+        if ckpt_path is not None:
+            payload = load_checkpoint_payload(ckpt_path, device)
+            if "model_state_dict" in payload:
+                model.load_state_dict(payload["model_state_dict"])
+            if "optimizer_state_dict" in payload:
+                optimizer.load_state_dict(payload["optimizer_state_dict"])
+            start_epoch = int(payload.get("epoch", 0)) + 1
+
+            maybe_history = payload.get("history")
+            if isinstance(maybe_history, list):
+                history = maybe_history
+            elif isinstance(payload.get("metrics"), dict):
+                history = [payload["metrics"]]
+
+            maybe_best = payload.get("best_record")
+            if isinstance(maybe_best, dict):
+                best_record = maybe_best
+            elif isinstance(payload.get("metrics"), dict) and "asr_acc" in payload["metrics"]:
+                best_record = payload["metrics"]
+
+            tqdm.write(
+                f"  resuming {run_label} from {ckpt_path.name} "
+                f"at epoch {start_epoch}/{cfg.unlearn.epochs}"
+            )
+
+    if start_epoch > cfg.unlearn.epochs:
+        summary_path = out_dir / "summary.json"
+        if summary_path.exists():
+            with open(summary_path, "r", encoding="utf-8") as f:
+                return model, json.load(f)
+
+        final_clean = evaluate(model, clean_test_loader, device)["accuracy"]
+        final_asr = evaluate(model, triggered_test_loader, device)["accuracy"]
+        summary = {
+            "final_clean_acc": final_clean,
+            "final_asr_acc": final_asr,
+            "best_record": best_record or {},
+        }
+        return model, summary
 
     forget_iter = cycle(forget_loader)
-    pbar = tqdm(range(1, cfg.unlearn.epochs + 1), desc="neggrad")
+    pbar = tqdm(range(start_epoch, cfg.unlearn.epochs + 1), desc="neggrad")
     for epoch in pbar:
         t0 = time.perf_counter()
         model.train()
@@ -94,6 +144,7 @@ def run_neggrad_unlearning(
             "forget_entropy": running_forget / max(total, 1),
             "steps": steps,
         }
+        save_best = False
 
         is_eval_epoch = (epoch % cfg.unlearn.eval_every == 0) or (epoch == cfg.unlearn.epochs)
         if is_eval_epoch:
@@ -111,10 +162,32 @@ def run_neggrad_unlearning(
                 should_save = best_candidate < current_best
             if should_save:
                 best_record = record.copy()
-                save_checkpoint(model, optimizer, epoch, record, out_dir / "best.pt")
+                save_best = True
 
         record["epoch_time"] = time.perf_counter() - t0
         history.append(record)
+
+        save_checkpoint(
+            model,
+            optimizer,
+            epoch,
+            record,
+            out_dir / "last.pt",
+            history=history,
+            extra_state={"best_record": best_record},
+        )
+        if save_best:
+            save_checkpoint(
+                model,
+                optimizer,
+                epoch,
+                record,
+                out_dir / "best.pt",
+                history=history,
+                extra_state={"best_record": best_record},
+            )
+        with open(out_dir / "history.json", "w", encoding="utf-8") as f:
+            json.dump(history, f, indent=2)
 
         desc = (
             f"neggrad | ep {epoch}/{cfg.unlearn.epochs}"
@@ -123,11 +196,6 @@ def run_neggrad_unlearning(
         if "clean_acc" in record:
             desc += f" | clean {record['clean_acc']:.3f} | asr {record['asr_acc']:.3f}"
         pbar.set_description(desc)
-
-    save_checkpoint(model, optimizer, cfg.unlearn.epochs, history[-1], out_dir / "last.pt")
-
-    with open(out_dir / "history.json", "w", encoding="utf-8") as f:
-        json.dump(history, f, indent=2)
 
     final_clean = evaluate(model, clean_test_loader, device)["accuracy"]
     final_asr = evaluate(model, triggered_test_loader, device)["accuracy"]

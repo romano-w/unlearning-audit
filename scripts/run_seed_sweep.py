@@ -33,6 +33,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--skip-unlearning", action="store_true", help="Skip unlearning stage")
     p.add_argument("--skip-evaluation", action="store_true", help="Skip evaluation stage")
     p.add_argument("--skip-analysis", action="store_true", help="Skip analysis stage")
+    p.add_argument("--resume", action="store_true", help="Resume interrupted seed runs and skip completed ones")
     p.add_argument(
         "--unlearn-methods",
         type=str,
@@ -93,6 +94,8 @@ def main() -> None:
             cmd.append("--skip-evaluation")
         if args.skip_analysis:
             cmd.append("--skip-analysis")
+        if args.resume:
+            cmd.append("--resume")
         _run(cmd)
 
     print("=" * 72)

@@ -24,6 +24,7 @@ def run_oracle_retrain(
     cfg: ExperimentConfig,
     device: torch.device,
     run_label: str = "unlearn/oracle_retrain",
+    resume: bool = False,
 ) -> tuple[torch.nn.Module, dict]:
     """Train a fresh model on retain-only data and return metrics summary."""
     local_cfg = copy.deepcopy(cfg)
@@ -47,6 +48,7 @@ def run_oracle_retrain(
         extra_eval={"asr": triggered_test_loader},
         eval_every=cfg.unlearn.eval_every,
         augment=True,
+        resume=resume,
     )
 
     clean_metrics = evaluate(model, clean_test_loader, device)

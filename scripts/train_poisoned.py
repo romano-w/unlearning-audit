@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -21,7 +22,7 @@ from unlearning_audit.data.poisoning import (
     build_triggered_test_set,
 )
 from unlearning_audit.models.resnet import build_model
-from unlearning_audit.train import evaluate, train
+from unlearning_audit.train import evaluate, load_checkpoint_payload, train
 
 
 def parse_args() -> argparse.Namespace:
@@ -36,6 +37,7 @@ def parse_args() -> argparse.Namespace:
         "--skip-clean", action="store_true",
         help="Skip clean model training (only train poisoned)",
     )
+    p.add_argument("--resume", action="store_true", help="Resume from checkpoints when available")
     return p.parse_args()
 
 
@@ -45,6 +47,26 @@ def set_seed(seed: int) -> None:
     np.random.seed(seed)
     torch.backends.cudnn.deterministic = False  # type: ignore[attr-defined]
     torch.backends.cudnn.benchmark = True  # type: ignore[attr-defined]
+
+
+def load_checkpoint_into_model(
+    model: torch.nn.Module,
+    checkpoint_path: Path,
+    device: torch.device,
+) -> dict:
+    state = load_checkpoint_payload(checkpoint_path, device)
+    if "model_state_dict" in state:
+        model.load_state_dict(state["model_state_dict"])
+    return state
+
+
+def stage_complete(stage_dir: Path, total_epochs: int) -> bool:
+    last_path = stage_dir / "last.pt"
+    best_path = stage_dir / "best.pt"
+    if not last_path.exists() or not best_path.exists():
+        return False
+    payload = load_checkpoint_payload(last_path, "cpu")
+    return int(payload.get("epoch", -1)) >= total_epochs
 
 
 def main() -> None:
@@ -102,6 +124,8 @@ def main() -> None:
     print(f"Test set    : {len(test_ds_raw)} clean, {len(triggered_test_ds)} triggered")
     print()
 
+    run_root = Path(cfg.output_dir) / cfg.name
+
     # ── Clean model ──────────────────────────────────────────────
     if not args.skip_clean:
         print("-" * 60)
@@ -110,16 +134,22 @@ def main() -> None:
         set_seed(cfg.train.seed)
         clean_model = build_model(cfg.model).to(device)
         clean_train_loader = make_loader(train_ds_raw, cfg.train.batch_size, cfg.data)
+        clean_stage_dir = run_root / "clean"
 
         t0 = time.perf_counter()
-        clean_model = train(
-            clean_model,
-            clean_train_loader,
-            clean_test_loader,
-            cfg,
-            device,
-            run_label="clean",
-        )
+        if args.resume and stage_complete(clean_stage_dir, cfg.train.epochs):
+            print("Resuming clean: stage already complete, loading best checkpoint.")
+            load_checkpoint_into_model(clean_model, clean_stage_dir / "best.pt", device)
+        else:
+            clean_model = train(
+                clean_model,
+                clean_train_loader,
+                clean_test_loader,
+                cfg,
+                device,
+                run_label="clean",
+                resume=args.resume,
+            )
         clean_time = time.perf_counter() - t0
 
         clean_metrics = evaluate(clean_model, clean_test_loader, device)
@@ -137,17 +167,23 @@ def main() -> None:
     set_seed(cfg.train.seed)
     poisoned_model = build_model(cfg.model).to(device)
     poisoned_train_loader = make_loader(poisoned_train_ds, cfg.train.batch_size, cfg.data)
+    poisoned_stage_dir = run_root / "poisoned"
 
     t0 = time.perf_counter()
-    poisoned_model = train(
-        poisoned_model,
-        poisoned_train_loader,
-        clean_test_loader,
-        cfg,
-        device,
-        run_label="poisoned",
-        extra_eval={"asr": triggered_test_loader},
-    )
+    if args.resume and stage_complete(poisoned_stage_dir, cfg.train.epochs):
+        print("Resuming poisoned: stage already complete, loading best checkpoint.")
+        load_checkpoint_into_model(poisoned_model, poisoned_stage_dir / "best.pt", device)
+    else:
+        poisoned_model = train(
+            poisoned_model,
+            poisoned_train_loader,
+            clean_test_loader,
+            cfg,
+            device,
+            run_label="poisoned",
+            extra_eval={"asr": triggered_test_loader},
+            resume=args.resume,
+        )
     poison_time = time.perf_counter() - t0
 
     poison_metrics = evaluate(poisoned_model, clean_test_loader, device)

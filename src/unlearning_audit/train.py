@@ -138,17 +138,57 @@ def save_checkpoint(
     epoch: int,
     metrics: dict,
     path: Path,
+    scheduler: CosineAnnealingLR | MultiStepLR | None = None,
+    history: list[dict] | None = None,
+    extra_state: dict | None = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(
-        {
-            "epoch": epoch,
-            "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "metrics": metrics,
-        },
-        path,
-    )
+    payload = {
+        "epoch": epoch,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "metrics": metrics,
+    }
+    if scheduler is not None:
+        payload["scheduler_state_dict"] = scheduler.state_dict()
+    if history is not None:
+        payload["history"] = history
+    if extra_state:
+        payload.update(extra_state)
+    torch.save(payload, path)
+
+
+def load_checkpoint_payload(path: Path, device: torch.device | str = "cpu") -> dict:
+    """Load a checkpoint payload from disk.
+
+    Returns an empty dict for unsupported payloads to keep resume logic simple.
+    """
+    state = torch.load(path, map_location=device)
+    return state if isinstance(state, dict) else {}
+
+
+def resume_checkpoint_path(out_dir: Path) -> Path | None:
+    """Return the best available checkpoint for resuming a stage."""
+    for name in ("last.pt", "best.pt"):
+        path = out_dir / name
+        if path.exists():
+            return path
+    return None
+
+
+def restore_scheduler_state(
+    scheduler: CosineAnnealingLR | MultiStepLR,
+    optimizer: torch.optim.Optimizer,
+    epoch: int,
+) -> None:
+    """Reconstruct scheduler state for older checkpoints without scheduler payloads."""
+    state = scheduler.state_dict()
+    state["last_epoch"] = epoch
+    state["_step_count"] = epoch + 1
+    state["_is_initial"] = False
+    state["_get_lr_called_within_step"] = False
+    state["_last_lr"] = [group["lr"] for group in optimizer.param_groups]
+    scheduler.load_state_dict(state)
 
 
 def train(
@@ -161,6 +201,7 @@ def train(
     extra_eval: dict[str, DataLoader] | None = None,
     eval_every: int = 5,
     augment: bool = True,
+    resume: bool = False,
 ) -> nn.Module:
     """Full training loop with logging and checkpointing.
 
@@ -179,8 +220,62 @@ def train(
 
     history: list[dict] = []
     best_acc = 0.0
+    start_epoch = 1
+    resume_payload: dict = {}
 
-    pbar = tqdm(range(1, cfg.train.epochs + 1), desc=run_label)
+    if resume:
+        ckpt_path = resume_checkpoint_path(out_dir)
+        if ckpt_path is not None:
+            resume_payload = load_checkpoint_payload(ckpt_path, device)
+            if "model_state_dict" in resume_payload:
+                model.load_state_dict(resume_payload["model_state_dict"])
+            if "optimizer_state_dict" in resume_payload:
+                optimizer.load_state_dict(resume_payload["optimizer_state_dict"])
+
+            ckpt_epoch = int(resume_payload.get("epoch", 0))
+            start_epoch = ckpt_epoch + 1
+
+            maybe_history = resume_payload.get("history")
+            if isinstance(maybe_history, list):
+                history = maybe_history
+            elif isinstance(resume_payload.get("metrics"), dict):
+                history = [resume_payload["metrics"]]
+
+            if "scheduler_state_dict" in resume_payload:
+                scheduler.load_state_dict(resume_payload["scheduler_state_dict"])
+            elif ckpt_epoch > 0:
+                restore_scheduler_state(scheduler, optimizer, ckpt_epoch)
+
+            best_acc = float(resume_payload.get("best_acc", 0.0))
+            if best_acc == 0.0:
+                best_acc = max(
+                    (
+                        float(row.get("test_acc", 0.0))
+                        for row in history
+                        if isinstance(row, dict)
+                    ),
+                    default=0.0,
+                )
+                if isinstance(resume_payload.get("metrics"), dict):
+                    best_acc = max(best_acc, float(resume_payload["metrics"].get("test_acc", 0.0)))
+
+            tqdm.write(
+                f"  resuming {run_label} from {ckpt_path.name} "
+                f"at epoch {start_epoch}/{cfg.train.epochs}"
+            )
+
+    if start_epoch > cfg.train.epochs:
+        best_path = out_dir / "best.pt"
+        if best_path.exists():
+            best_payload = load_checkpoint_payload(best_path, device)
+            if "model_state_dict" in best_payload:
+                model.load_state_dict(best_payload["model_state_dict"])
+        elif "model_state_dict" in resume_payload:
+            model.load_state_dict(resume_payload["model_state_dict"])
+        tqdm.write(f"  {run_label} already complete; using existing checkpoint.")
+        return model
+
+    pbar = tqdm(range(start_epoch, cfg.train.epochs + 1), desc=run_label)
     for epoch in pbar:
         t0 = time.perf_counter()
         train_metrics = train_one_epoch(model, train_loader, optimizer, device, augment=augment)
@@ -194,6 +289,7 @@ def train(
             "train_acc": train_metrics["accuracy"],
             "train_loss": train_metrics["loss"],
         }
+        save_best = False
 
         if is_eval_epoch:
             test_metrics = evaluate(model, test_loader, device)
@@ -207,10 +303,34 @@ def train(
 
             if test_metrics["accuracy"] > best_acc:
                 best_acc = test_metrics["accuracy"]
-                save_checkpoint(model, optimizer, epoch, record, out_dir / "best.pt")
+                save_best = True
 
         record["epoch_time"] = time.perf_counter() - t0
         history.append(record)
+
+        save_checkpoint(
+            model,
+            optimizer,
+            epoch,
+            record,
+            out_dir / "last.pt",
+            scheduler=scheduler,
+            history=history,
+            extra_state={"best_acc": best_acc},
+        )
+        if save_best:
+            save_checkpoint(
+                model,
+                optimizer,
+                epoch,
+                record,
+                out_dir / "best.pt",
+                scheduler=scheduler,
+                history=history,
+                extra_state={"best_acc": best_acc},
+            )
+        with open(out_dir / "history.json", "w", encoding="utf-8") as f:
+            json.dump(history, f, indent=2)
 
         desc = (
             f"{run_label} | ep {epoch}/{cfg.train.epochs} "
@@ -223,12 +343,7 @@ def train(
             desc += f" | asr {record['asr_acc']:.3f}"
         pbar.set_description(desc)
 
-    save_checkpoint(model, optimizer, cfg.train.epochs, record, out_dir / "last.pt")  # type: ignore[possibly-undefined]
-
-    with open(out_dir / "history.json", "w") as f:
-        json.dump(history, f, indent=2)
-
-    final_test = record.get("test_acc", 0.0)  # type: ignore[possibly-undefined]
+    final_test = history[-1].get("test_acc", 0.0)
     tqdm.write(
         f"  {run_label} done -- best test acc: {best_acc:.4f}, "
         f"final test acc: {final_test:.4f}"
